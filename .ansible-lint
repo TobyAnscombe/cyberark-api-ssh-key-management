@@ -11,3 +11,6 @@ skip_list:
   - ignore-errors          # authorized_keys may not exist on first rotation
   - var-naming[no-role-prefix]  # internal _cyberark_* vars intentionally prefixed with _
   - run-once[task]         # API calls delegate to localhost with run_once — intentional
+
+warn_list:
+  - yaml[line-length]      # URL construction in set_fact cannot be wrapped without breaking the value

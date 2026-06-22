@@ -140,9 +140,9 @@ No static account list is needed — accounts are discovered from CyberArk at ru
 | Role | Source | Purpose |
 |---|---|---|
 | `cyberark_auth` | `cyberark-api-management` | OAuth2 authentication → `cyberark_token` |
-| `manage_user` | `ubuntu-user-creation` | OS user creation, sudo, sshd AllowUsers |
+| `ubuntu_manage_user` | `ubuntu-user-creation` | OS user creation, sudo, sshd AllowUsers |
 
-The `manage_user` role must be version ≥ the commit that added `manage_user_ssh_key_required` support (keys are managed by CyberArk, not declared statically).
+The `ubuntu_manage_user` role must be v1.0.0+ (adds `manage_user_ssh_key_required` support — keys are managed by CyberArk, not declared statically).
 
 ---
 

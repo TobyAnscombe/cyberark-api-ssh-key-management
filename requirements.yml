@@ -9,6 +9,6 @@ roles:
   - name: cyberark_auth
     src: https://github.com/TobyAnscombe/cyberark-api-management
     version: v1.0.2
-  - name: manage_user
+  - name: ubuntu_manage_user
     src: https://github.com/TobyAnscombe/ubuntu-user-creation
     version: v1.0.0

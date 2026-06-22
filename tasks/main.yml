@@ -21,7 +21,7 @@
   ansible.builtin.set_fact:
     _cyberark_ssh_host_accounts: >-
       {%- set result = [] -%}
-      {%- for acct in hostvars['localhost']['_cyberark_ssh_accounts'] -%}
+      {%- for acct in hostvars[groups['all'][0]]['_cyberark_ssh_accounts'] | default([]) -%}
         {%- set machines = acct.remoteMachinesAccess.remoteMachines | default('') -%}
         {%- if machines == '' or inventory_hostname in machines.split(';') -%}
           {%- set _ = result.append(acct) -%}

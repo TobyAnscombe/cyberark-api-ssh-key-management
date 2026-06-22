@@ -1,0 +1,12 @@
+profile: basic
+offline: true
+
+mock_roles:
+  - cyberark_auth
+  - manage_user
+  - cyberark_ssh_key_rotation
+
+skip_list:
+  - ignore-errors          # authorized_keys may not exist on first rotation
+  - var-naming[no-role-prefix]  # internal _cyberark_* vars intentionally prefixed with _
+  - run-once[task]         # API calls delegate to localhost with run_once — intentional

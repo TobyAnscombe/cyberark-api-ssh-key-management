@@ -1,0 +1,180 @@
+---
+# Per-account key rotation. Called in a loop with _account set to the CyberArk
+# account dict. Steps:
+#   1. Capture existing managed keys on the target host (to know what N-1 is)
+#   2. Generate new ED25519 key pair (N+1) in a 0700 temp dir on localhost
+#   3. Convert to PPK v2 and assert the format
+#   4. Add N+1 to authorized_keys (fail-safe: N and N+1 are both valid)
+#   5. Update CyberArk with the N+1 private key
+#   6. Remove N-1 from authorized_keys if it existed before this rotation
+#   7. Always: delete the temp dir regardless of success or failure
+
+- name: "Create secure temp dir for {{ _account.name }}"
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "cyberark_ssh_"
+  register: _key_tmpdir
+  delegate_to: localhost
+
+- name: "Set temp dir permissions for {{ _account.name }}"
+  ansible.builtin.file:
+    path: "{{ _key_tmpdir.path }}"
+    mode: "0700"
+  delegate_to: localhost
+
+- name: "Rotate key for {{ _account.name }}"
+  block:
+
+    # Step 1 — capture current managed key lines before generating the new one.
+    # stdout_lines will be [] (first rotation), [N] (one previous rotation),
+    # or [N-1, N] (two or more previous rotations). The first entry is always
+    # the oldest and is removed in step 6 when length >= 2.
+    - name: "Read existing managed keys for {{ _account.name }}"
+      ansible.builtin.shell: >
+        grep "cark_managed_{{ _account.name }}"
+        /home/{{ _account.userName }}/.ssh/authorized_keys 2>/dev/null || true
+      register: _existing_managed_keys
+      changed_when: false
+      delegate_to: "{{ _account.address }}"
+
+    # Step 2 — generate N+1
+    - name: "Generate ED25519 key pair for {{ _account.name }}"
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -t
+          - "{{ cyberark_ssh_key_algorithm }}"
+          - -f
+          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
+          - -N
+          - ""
+          - -C
+          - "cark_managed_{{ _account.name }}"
+      delegate_to: localhost
+      no_log: true
+
+    # Step 3 — convert and assert PPK v2
+    - name: "Convert to PPK v2 for {{ _account.name }}"
+      ansible.builtin.command:
+        argv:
+          - puttygen
+          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
+          - -O
+          - private
+          - --ppk-param
+          - version=2
+          - -o
+          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+      delegate_to: localhost
+      no_log: true
+
+    - name: "Verify PPK v2 header for {{ _account.name }}"
+      ansible.builtin.command:
+        argv:
+          - head
+          - -n
+          - "1"
+          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+      register: _ppk_header
+      changed_when: false
+      delegate_to: localhost
+
+    - name: "Assert PPK v2 format for {{ _account.name }}"
+      ansible.builtin.assert:
+        that: "'PuTTY-User-Key-File-2' in _ppk_header.stdout"
+        fail_msg: >-
+          puttygen produced {{ _ppk_header.stdout | trim }} for {{ _account.name }}.
+          Expected PPK v2. Add --ppk-param version=2 or check puttygen version.
+
+    # Read key material into vars on localhost only — never touch remote hosts with raw key data
+    - name: "Read PPK private key for {{ _account.name }}"
+      ansible.builtin.slurp:
+        src: "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+      register: _new_private_ppk
+      delegate_to: localhost
+      no_log: true
+
+    - name: "Read public key for {{ _account.name }}"
+      ansible.builtin.slurp:
+        src: "{{ _key_tmpdir.path }}/id_{{ _account.name }}.pub"
+      register: _new_public_key_raw
+      delegate_to: localhost
+
+    - name: "Store key material for {{ _account.name }}"
+      ansible.builtin.set_fact:
+        _new_private_key: "{{ _new_private_ppk.content | b64decode | regex_replace('\\r', '') }}"
+        _new_public_key: "{{ _new_public_key_raw.content | b64decode | trim }}"
+      delegate_to: localhost
+      no_log: true
+
+    # Step 4 — fail-safe: add N+1 before touching CyberArk so both N and N+1 are valid
+    - name: "[DRY RUN] Would add N+1 public key for {{ _account.name }} on {{ inventory_hostname }}"
+      ansible.builtin.debug:
+        msg: >-
+          authorized_key: user={{ _account.userName }}
+          key=cark_managed_{{ _account.name }} state=present
+      when: cyberark_dry_run | bool
+
+    - name: "Add N+1 public key to authorized_keys for {{ _account.name }}"
+      ansible.posix.authorized_key:
+        user: "{{ _account.userName }}"
+        key: "{{ hostvars['localhost']['_new_public_key'] }}"
+        state: present
+      delegate_to: "{{ _account.address }}"
+      when: not cyberark_dry_run | bool
+
+    # Step 5 — update CyberArk with N+1 private key
+    - name: "[DRY RUN] Would update CyberArk account {{ _account.name }} with new private key"
+      ansible.builtin.debug:
+        msg: >-
+          POST /passwordvault/api/Accounts/{{ _account.id }}/Password/Update
+          — would store new PPK v2 private key
+      when: cyberark_dry_run | bool
+
+    - name: "Update CyberArk account {{ _account.name }} with new private key"
+      ansible.builtin.uri:
+        url: >-
+          https://{{ cyberark_subdomain }}.privilegecloud.cyberark.cloud/passwordvault/api/Accounts/{{
+            _account.id
+          }}/Password/Update
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cyberark_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          NewCredentials: "{{ hostvars['localhost']['_new_private_key'] }}"
+        status_code: 200
+        validate_certs: "{{ cyberark_validate_certs }}"
+      delegate_to: localhost
+      no_log: true
+      when: not cyberark_dry_run | bool
+
+    # Step 6 — remove N-1 (the oldest key) now that CyberArk is updated.
+    # Only runs when there were already 2+ managed keys before this rotation.
+    - name: "[DRY RUN] Would remove N-1 key for {{ _account.name }} on {{ inventory_hostname }}"
+      ansible.builtin.debug:
+        msg: >-
+          authorized_key: user={{ _account.userName }}
+          key={{ _existing_managed_keys.stdout_lines[0] }} state=absent (N-1 removal)
+      when:
+        - cyberark_dry_run | bool
+        - _existing_managed_keys.stdout_lines | length >= 2
+
+    - name: "Remove N-1 key from authorized_keys for {{ _account.name }}"
+      ansible.posix.authorized_key:
+        user: "{{ _account.userName }}"
+        key: "{{ _existing_managed_keys.stdout_lines[0] }}"
+        state: absent
+      delegate_to: "{{ _account.address }}"
+      when:
+        - not cyberark_dry_run | bool
+        - _existing_managed_keys.stdout_lines | length >= 2
+
+  always:
+    - name: "Remove temp dir for {{ _account.name }}"
+      ansible.builtin.file:
+        path: "{{ _key_tmpdir.path }}"
+        state: absent
+      delegate_to: localhost
+      no_log: true

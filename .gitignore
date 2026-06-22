@@ -1,0 +1,24 @@
+# Ansible
+.ansible/
+*.retry
+roles/
+
+# SSH keys and sensitive files — never commit key material
+*.pem
+*.ppk
+id_*
+*.pub
+*.vault_pass
+.vault_pass
+.env
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Claude
+CLAUDE.md
+tasks/

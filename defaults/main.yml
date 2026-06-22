@@ -1,0 +1,26 @@
+---
+# Required — must be provided by the playbook. Left empty here so ansible-lint
+# can parse the role without a real tenant.
+cyberark_subdomain: ""
+
+# Optional: restrict account discovery to a single safe.
+# Empty string = search all safes the token has access to.
+cyberark_safe: ""
+
+# Account discovery filters applied client-side after the API search.
+cyberark_ssh_key_name_prefix: "cark_"    # account names must start with this
+cyberark_ssh_key_secret_type: "key"       # only SSH key accounts (not password)
+cyberark_ssh_key_platform_filter: []      # optional list of platformIds to restrict further
+cyberark_ssh_key_page_size: 1000          # accounts returned per API page
+
+# Key generation
+cyberark_ssh_key_algorithm: "ed25519"
+
+# OS user setup — applied to every discovered account on applicable hosts.
+# Set false to skip user/sudo/sshd management (keys only).
+cyberark_ssh_key_ensure_users: true
+cyberark_ssh_key_sudo: true               # grant passwordless sudo to discovered accounts
+
+# Behaviour flags
+cyberark_dry_run: true          # default safe; set false to apply changes
+cyberark_validate_certs: true

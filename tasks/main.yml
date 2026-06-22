@@ -1,0 +1,70 @@
+---
+- name: Assert required variables are set
+  ansible.builtin.assert:
+    that:
+      - cyberark_subdomain | length > 0
+      - cyberark_token is defined
+      - cyberark_token | length > 0
+    fail_msg: >-
+      cyberark_subdomain must be set and cyberark_token must be defined.
+      Include the cyberark_auth role before cyberark_ssh_key_rotation.
+
+# Discovers all cark_ SSH key accounts from CyberArk. Runs once from localhost;
+# result available to all hosts via hostvars['localhost']['_cyberark_ssh_accounts'].
+- ansible.builtin.include_tasks: discover_accounts.yml
+
+# Per inventory host: filter to accounts that apply to this host.
+# An account with an empty remoteMachinesAccess.remoteMachines applies to all hosts.
+# An account with machines set applies only to hosts whose inventory_hostname
+# appears in that semicolon-separated list.
+- name: Filter CyberArk accounts applicable to this host
+  ansible.builtin.set_fact:
+    _cyberark_ssh_host_accounts: >-
+      {%- set result = [] -%}
+      {%- for acct in hostvars['localhost']['_cyberark_ssh_accounts'] -%}
+        {%- set machines = acct.remoteMachinesAccess.remoteMachines | default('') -%}
+        {%- if machines == '' or inventory_hostname in machines.split(';') -%}
+          {%- set _ = result.append(acct) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Report accounts applicable to this host
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ _cyberark_ssh_host_accounts | length }} account(s) to rotate
+      ({{ _cyberark_ssh_host_accounts | map(attribute='name') | list | join(', ') or 'none' }})
+
+# Ensure OS users exist, have passwordless sudo, and are in sshd AllowUsers.
+# Driven entirely by the CyberArk account discovery — no static account list needed.
+- name: Build manage_user_accounts from CyberArk discovery
+  ansible.builtin.set_fact:
+    manage_user_accounts: >-
+      {{
+        _cyberark_ssh_host_accounts
+        | map(attribute='userName')
+        | map('community.general.dict_kv', 'name')
+        | list
+        | map('combine', {
+            'state': 'present',
+            'sudo': cyberark_ssh_key_sudo,
+            'allow_ssh': true
+          })
+        | list
+      }}
+    manage_user_ssh_key_required: false
+  when: cyberark_ssh_key_ensure_users | bool
+
+- name: Ensure OS users exist on this host
+  ansible.builtin.include_role:
+    name: manage_user
+  when:
+    - cyberark_ssh_key_ensure_users | bool
+    - _cyberark_ssh_host_accounts | length > 0
+
+# Rotate the SSH key pair for each applicable account.
+- ansible.builtin.include_tasks: rotate_key.yml
+  loop: "{{ _cyberark_ssh_host_accounts }}"
+  loop_control:
+    loop_var: _account
+    label: "{{ _account.name }}"

@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  author: TobyAnscombe
+  namespace: tobyanscombe
+  role_name: cyberark_ssh_key_rotation
+  description: >
+    Discovers CyberArk Privilege Cloud accounts with a cark_ prefix, ensures the
+    corresponding OS users exist on target hosts, and rotates their ED25519 SSH
+    key pairs with a fail-safe two-key window.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: [focal, jammy, noble]
+    - name: Debian
+      versions: [bullseye, bookworm]
+
+dependencies:
+  - role: cyberark_auth
+  - role: manage_user

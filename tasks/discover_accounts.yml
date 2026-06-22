@@ -1,0 +1,88 @@
+---
+# Discovers all CyberArk accounts matching the cark_ prefix with secretType: key.
+# Paginates through all results and stores the filtered list on localhost.
+# All tasks delegate to localhost and run once — the result is accessed downstream
+# via hostvars['localhost']['_cyberark_ssh_accounts'].
+
+- name: Build account search URL
+  ansible.builtin.set_fact:
+    _cyberark_search_url: >-
+      https://{{ cyberark_subdomain }}.privilegecloud.cyberark.cloud/passwordvault/api/Accounts?search={{
+        cyberark_ssh_key_name_prefix | urlencode
+      }}&limit={{ cyberark_ssh_key_page_size }}{{
+        '&filter=safeName%20eq%20' + cyberark_safe | urlencode if cyberark_safe | length > 0 else ''
+      }}
+  delegate_to: localhost
+  run_once: true
+
+- name: Fetch CyberArk accounts (page 1)
+  ansible.builtin.uri:
+    url: "{{ _cyberark_search_url }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cyberark_token }}"
+    validate_certs: "{{ cyberark_validate_certs }}"
+    status_code: 200
+  register: _cyberark_page
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Collect all pages
+  ansible.builtin.set_fact:
+    _cyberark_all_accounts_raw: "{{ _cyberark_page.json.value | default([]) }}"
+  delegate_to: localhost
+  run_once: true
+
+# Paginate if nextLink is present
+- name: Fetch remaining pages
+  ansible.builtin.uri:
+    url: "{{ _cyberark_next_url }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cyberark_token }}"
+    validate_certs: "{{ cyberark_validate_certs }}"
+    status_code: 200
+  register: _cyberark_next_page
+  vars:
+    _cyberark_next_url: "{{ _cyberark_page.json.nextLink | default('') }}"
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  when: _cyberark_page.json.nextLink is defined and _cyberark_page.json.nextLink | length > 0
+
+- name: Append next page results
+  ansible.builtin.set_fact:
+    _cyberark_all_accounts_raw: >-
+      {{ _cyberark_all_accounts_raw + (_cyberark_next_page.json.value | default([])) }}
+  delegate_to: localhost
+  run_once: true
+  when: _cyberark_next_page is not skipped
+
+# Note: for vaults with >2000 matching accounts, extend the loop above into a
+# proper pagination loop. For typical cark_ fleets a single nextLink page is sufficient.
+
+- name: Filter to cark_ SSH key accounts
+  ansible.builtin.set_fact:
+    _cyberark_ssh_accounts: >-
+      {%- set result = [] -%}
+      {%- for acct in _cyberark_all_accounts_raw -%}
+        {%- if acct.name is defined
+               and acct.name.startswith(cyberark_ssh_key_name_prefix)
+               and acct.secretType | default('') == cyberark_ssh_key_secret_type
+               and (cyberark_ssh_key_platform_filter | length == 0
+                    or acct.platformId in cyberark_ssh_key_platform_filter) -%}
+          {%- set _ = result.append(acct) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+  delegate_to: localhost
+  run_once: true
+
+- name: Report discovered accounts
+  ansible.builtin.debug:
+    msg: >-
+      Discovered {{ _cyberark_ssh_accounts | length }} cark_ SSH key account(s):
+      {{ _cyberark_ssh_accounts | map(attribute='name') | list | join(', ') }}
+  delegate_to: localhost
+  run_once: true

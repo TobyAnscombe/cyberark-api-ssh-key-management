@@ -1,0 +1,39 @@
+---
+# Rotates ED25519 SSH keys for all CyberArk accounts with the cark_ prefix.
+#
+# Inventory controls which hosts are targeted. Accounts whose
+# remoteMachinesAccess.remoteMachines field is set are only rotated on the
+# matching inventory hosts; accounts with an empty field rotate on all hosts.
+#
+# Prerequisites:
+#   ansible-galaxy role install -r requirements.yml
+#   ansible-vault create ~/.ansible/vault/cyberark.yml   # see vars below
+#
+# Usage:
+#   ansible-playbook -i inventory.ini examples/site.yml               # dry run (default)
+#   ansible-playbook -i inventory.ini examples/site.yml -e cyberark_dry_run=false
+
+- name: Rotate CyberArk SSH keys
+  hosts: all
+  gather_facts: false
+
+  vars_files:
+    - ~/.ansible/vault/cyberark.yml   # must define: cyberark_identity_tenant,
+                                      #   cyberark_client_id, cyberark_client_secret
+
+  vars:
+    cyberark_subdomain: "myorg"       # replace with your Privilege Cloud subdomain
+    cyberark_dry_run: true            # set false to apply changes
+    cyberark_ssh_key_sudo: true       # grant passwordless sudo to discovered accounts
+
+    # Optional: restrict rotation to a specific safe
+    # cyberark_safe: "linux-ssh-keys"
+
+    # Optional: restrict rotation to specific CyberArk platform IDs
+    # cyberark_ssh_key_platform_filter:
+    #   - UnixSSHKeys
+    #   - myorg-linux-ssh-keys
+
+  roles:
+    - cyberark_auth              # authenticates to CyberArk Identity; sets cyberark_token
+    - cyberark_ssh_key_rotation  # discovers accounts, ensures users, rotates keys

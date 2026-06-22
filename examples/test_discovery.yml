@@ -1,0 +1,115 @@
+---
+# Proves cark_ account discovery and per-host machine scoping work correctly.
+# Runs entirely from localhost — no on-prem SSH access required.
+#
+# Usage:
+#   ansible-playbook examples/test_discovery.yml \
+#     --vault-password-file ~/.ansible/.vault_pass
+#
+# Override test hostnames:
+#   -e '{"test_hostnames": ["server1.example.com", "server2.example.com"]}'
+#
+# Restrict discovery to one safe:
+#   -e cyberark_safe=linux-ssh-keys
+
+- name: Authenticate to CyberArk
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ~/.ansible/vault/cyberark.yml
+  roles:
+    - cyberark_api_authentication
+
+- name: Discover cark_ accounts and test host scoping
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ~/.ansible/vault/cyberark.yml
+  vars:
+    cyberark_ssh_key_name_prefix: "cark_"
+    cyberark_ssh_key_secret_type: "key"
+    cyberark_ssh_key_platform_filter: []
+    cyberark_ssh_key_page_size: 1000
+    cyberark_safe: ""
+    cyberark_validate_certs: true
+    # Hostnames to test machine-scoping against (simulate what the on-prem inventory would contain)
+    test_hostnames:
+      - server1.example.com
+      - server2.example.com
+      - unrelated-host
+
+  tasks:
+
+    # ── Account discovery ─────────────────────────────────────────────────────
+
+    - name: Build account search URL
+      ansible.builtin.set_fact:
+        _search_url: "https://{{ cyberark_subdomain }}.privilegecloud.cyberark.cloud/passwordvault/api/Accounts?search={{ cyberark_ssh_key_name_prefix | urlencode }}&limit={{ cyberark_ssh_key_page_size }}{{ '&filter=safeName%20eq%20' + (cyberark_safe | urlencode) if cyberark_safe | length > 0 else '' }}"
+
+    - name: Fetch cark_ accounts from CyberArk
+      ansible.builtin.uri:
+        url: "{{ _search_url }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ cyberark_token }}"
+        validate_certs: "{{ cyberark_validate_certs }}"
+        status_code: 200
+      register: _cyberark_page
+      no_log: true
+
+    - name: Filter to SSH key accounts with cark_ prefix
+      ansible.builtin.set_fact:
+        _cyberark_ssh_accounts: >-
+          {%- set result = [] -%}
+          {%- for acct in _cyberark_page.json.value | default([]) -%}
+            {%- if acct.name is defined
+                   and acct.name.startswith(cyberark_ssh_key_name_prefix)
+                   and acct.secretType | default('') == cyberark_ssh_key_secret_type
+                   and (cyberark_ssh_key_platform_filter | length == 0
+                        or acct.platformId in cyberark_ssh_key_platform_filter) -%}
+              {%- set _ = result.append(acct) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Assert at least one cark_ SSH key account was found
+      ansible.builtin.assert:
+        that: _cyberark_ssh_accounts | length > 0
+        fail_msg: >-
+          No cark_ SSH key accounts found. Check cyberark_safe, cyberark_subdomain,
+          and that accounts exist with secretType=key and a name starting with 'cark_'.
+
+    - name: Show discovered accounts
+      ansible.builtin.debug:
+        msg: >-
+          Found {{ _cyberark_ssh_accounts | length }} account(s):
+          {% for acct in _cyberark_ssh_accounts %}
+          - {{ acct.name }}
+              safe={{ acct.safeName }}
+              user={{ acct.userName }}
+              platform={{ acct.platformId }}
+              machines={{ acct.remoteMachinesAccess.remoteMachines | default('(unrestricted — all hosts)') }}
+          {% endfor %}
+
+    # ── Machine-scoping filter test ────────────────────────────────────────────
+    # Mirrors the filter in tasks/main.yml — inventory_hostname replaced by the
+    # test hostname. Empty remoteMachines = unrestricted (applies to every host).
+
+    - name: Test machine-scoping filter
+      ansible.builtin.debug:
+        msg: >-
+          {{ item }}: {{ _scoped | length }} account(s) would rotate —
+          {{ _scoped | map(attribute='name') | list | join(', ') or 'none' }}
+      vars:
+        _scoped: >-
+          {%- set result = [] -%}
+          {%- for acct in _cyberark_ssh_accounts -%}
+            {%- set machines = acct.remoteMachinesAccess.remoteMachines | default('') -%}
+            {%- if machines == '' or item in machines.split(';') -%}
+              {%- set _ = result.append(acct) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
+      loop: "{{ test_hostnames }}"
+      loop_control:
+        label: "{{ item }}"

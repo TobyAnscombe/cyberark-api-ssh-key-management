@@ -1,0 +1,14 @@
+---
+collections:
+  - name: ansible.posix
+    version: ">=2.0.0"
+  - name: community.general
+    version: ">=7.0.0"
+
+roles:
+  - name: cyberark_auth
+    src: https://github.com/TobyAnscombe/cyberark-api-management
+    version: main
+  - name: manage_user
+    src: https://github.com/TobyAnscombe/ubuntu-user-creation
+    version: main

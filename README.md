@@ -35,7 +35,7 @@ At any point during rotation, at most **two** managed keys exist in `authorized_
 - SSH access to target hosts
 
 **Target nodes:**
-- Ubuntu 20.04, 22.04, or 24.04
+- Ubuntu 18.04, 20.04, 22.04, or 24.04
 - Python 3 at `/usr/bin/python3`
 - `become: true` — the role modifies system accounts, sshd, and sudoers
 

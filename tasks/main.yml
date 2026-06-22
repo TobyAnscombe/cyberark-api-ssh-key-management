@@ -11,7 +11,8 @@
 
 # Discovers all cark_ SSH key accounts from CyberArk. Runs once from localhost;
 # result available to all hosts via hostvars['localhost']['_cyberark_ssh_accounts'].
-- ansible.builtin.include_tasks: discover_accounts.yml
+- name: Discover cark_ SSH key accounts from CyberArk
+  ansible.builtin.include_tasks: discover_accounts.yml
 
 # Per inventory host: filter to accounts that apply to this host.
 # An account with an empty remoteMachinesAccess.remoteMachines applies to all hosts.
@@ -63,7 +64,8 @@
     - _cyberark_ssh_host_accounts | length > 0
 
 # Rotate the SSH key pair for each applicable account.
-- ansible.builtin.include_tasks: rotate_key.yml
+- name: "Rotate SSH key for {{ _account.name }}"
+  ansible.builtin.include_tasks: rotate_key.yml
   loop: "{{ _cyberark_ssh_host_accounts }}"
   loop_control:
     loop_var: _account

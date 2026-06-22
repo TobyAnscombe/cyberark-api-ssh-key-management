@@ -3,7 +3,8 @@ offline: true
 
 mock_roles:
   - cyberark_auth
-  - manage_user
+  - cyberark_api_authentication
+  - ubuntu_manage_user
   - cyberark_ssh_key_rotation
 
 skip_list:

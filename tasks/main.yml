@@ -59,7 +59,6 @@
 - name: Ensure OS users exist on this host
   ansible.builtin.include_role:
     name: ubuntu_manage_user
-  become: true
   when:
     - cyberark_ssh_key_ensure_users | bool
     - _cyberark_ssh_host_accounts | length > 0

@@ -110,16 +110,27 @@
         ls -la /home/{{ _account.userName }}/.ssh/ 2>&1 || true
         echo "=== authorized_keys ==="
         cat /home/{{ _account.userName }}/.ssh/authorized_keys 2>&1 || true
-        echo "=== fingerprint of generated pub key ==="
-        ssh-keygen -lf {{ _key_tmpdir.path }}/id_{{ _account.name }}.pub 2>&1 || true
       register: _debug_authkeys
       become: true
       changed_when: false
       when: not cyberark_dry_run | bool
 
-    - name: "DEBUG — show authorized_keys state for {{ _account.name }}"
+    - name: "DEBUG — fingerprint of generated public key for {{ _account.name }}"
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -lf
+          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.pub"
+      register: _debug_fingerprint
+      changed_when: false
+      delegate_to: localhost
+      when: not cyberark_dry_run | bool
+
+    - name: "DEBUG — show authorized_keys and key fingerprint for {{ _account.name }}"
       ansible.builtin.debug:
-        var: _debug_authkeys.stdout_lines
+        msg:
+          - "{{ _debug_authkeys.stdout_lines }}"
+          - "fingerprint: {{ _debug_fingerprint.stdout | trim }}"
       when: not cyberark_dry_run | bool
 
     # Step 5 — update CyberArk with N+1 private key
@@ -150,26 +161,30 @@
       no_log: true
       when: not cyberark_dry_run | bool
 
-    # Step 6 — remove N-1 (the oldest key) now that CyberArk is updated.
-    # Only runs when there were already 2+ managed keys before this rotation.
-    - name: "[DRY RUN] Remove N-1 from authorized_keys: {{ _account.name }}"
+    # Step 6 — remove all pre-rotation managed keys now that CyberArk holds N+1.
+    # Loops over every key that existed before this rotation so stale keys don't
+    # accumulate across runs. The fail-safe window (N and N+1 both valid) is
+    # preserved because N+1 was added in step 4 before any removal here.
+    - name: "[DRY RUN] Remove pre-rotation keys from authorized_keys: {{ _account.name }}"
       ansible.builtin.debug:
         msg: >-
           authorized_key: user={{ _account.userName }}
-          key={{ _existing_managed_keys.stdout_lines[0] }} state=absent (N-1 removal)
+          key={{ item }} state=absent (pre-rotation key removal)
+      loop: "{{ _existing_managed_keys.stdout_lines }}"
       when:
         - cyberark_dry_run | bool
-        - _existing_managed_keys.stdout_lines | length >= 2
+        - _existing_managed_keys.stdout_lines | length > 0
 
-    - name: "Remove N-1 key from authorized_keys for {{ _account.name }}"
+    - name: "Remove pre-rotation managed keys from authorized_keys for {{ _account.name }}"
       authorized_key:
         user: "{{ _account.userName }}"
-        key: "{{ _existing_managed_keys.stdout_lines[0] }}"
+        key: "{{ item }}"
         state: absent
       become: true
+      loop: "{{ _existing_managed_keys.stdout_lines }}"
       when:
         - not cyberark_dry_run | bool
-        - _existing_managed_keys.stdout_lines | length >= 2
+        - _existing_managed_keys.stdout_lines | length > 0
 
   always:
     - name: "Remove temp dir for {{ _account.name }}"

@@ -17,4 +17,3 @@ galaxy_info:
 
 dependencies:
   - role: cyberark_auth
-  - role: ubuntu_manage_user

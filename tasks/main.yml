@@ -18,6 +18,16 @@
 # An account with an empty remoteMachinesAccess.remoteMachines applies to all hosts.
 # An account with machines set applies only to hosts whose inventory_hostname
 # appears in that semicolon-separated list.
+- name: DEBUG remote machines access for discovered accounts
+  ansible.builtin.debug:
+    msg: >-
+      account={{ item.name }}
+      remoteMachines={{ item.remoteMachinesAccess.remoteMachines | default('(empty)') }}
+      inventory_hostname={{ inventory_hostname }}
+  loop: "{{ hostvars[groups['all'][0]]['_cyberark_ssh_accounts'] | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Filter CyberArk accounts applicable to this host
   ansible.builtin.set_fact:
     _cyberark_ssh_host_accounts: >-

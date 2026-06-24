@@ -25,10 +25,6 @@
     mode: "0700"
   delegate_to: localhost
 
-- name: "DEBUG dry_run state for {{ _account.name }}"
-  ansible.builtin.debug:
-    msg: "cyberark_dry_run={{ cyberark_dry_run }} (pass -e cyberark_dry_run=false to apply)"
-
 - name: "Rotate key for {{ _account.name }}"
   block:
 
@@ -93,12 +89,6 @@
           puttygen produced {{ _ppk_header.stdout | trim }} for {{ _account.name }}.
           Expected PPK v2. Add --ppk-param version=2 or check puttygen version.
 
-    - name: "DEBUG public key content for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg: >-
-          pub_key={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}
-          ppk_len={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | length }}
-
     # Step 4 — fail-safe: add N+1 before touching CyberArk so both N and N+1 are valid
     - name: "[DRY RUN] Add N+1 to authorized_keys: {{ _account.name }}"
       ansible.builtin.debug:
@@ -142,11 +132,6 @@
       register: _cyberark_update_result
       delegate_to: localhost
       no_log: true
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG CyberArk update response status for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg: "cyberark_update_status={{ _cyberark_update_result.status | default('skipped') }}"
       when: not cyberark_dry_run | bool
 
     # Step 6 — remove N-1 (the oldest key) now that CyberArk is updated.

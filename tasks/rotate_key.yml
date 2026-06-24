@@ -104,7 +104,6 @@
       ansible.builtin.set_fact:
         _new_private_key: "{{ _new_private_ppk.content | b64decode | regex_replace('\\r', '') }}"
         _new_public_key: "{{ _new_public_key_raw.content | b64decode | trim }}"
-      delegate_to: localhost
       no_log: true
 
     # Step 4 — fail-safe: add N+1 before touching CyberArk so both N and N+1 are valid
@@ -118,7 +117,7 @@
     - name: "Add N+1 public key to authorized_keys for {{ _account.name }}"
       ansible.posix.authorized_key:
         user: "{{ _account.userName }}"
-        key: "{{ hostvars['localhost']['_new_public_key'] }}"
+        key: "{{ _new_public_key }}"
         state: present
       delegate_to: "{{ _account.address }}"
       when: not cyberark_dry_run | bool
@@ -143,7 +142,7 @@
           Content-Type: "application/json"
         body_format: json
         body:
-          NewCredentials: "{{ hostvars['localhost']['_new_private_key'] }}"
+          NewCredentials: "{{ _new_private_key }}"
         status_code: 200
         validate_certs: "{{ cyberark_validate_certs }}"
       delegate_to: localhost

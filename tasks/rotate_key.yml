@@ -1,16 +1,13 @@
 ---
 # Per-account key rotation. Called in a loop with _account set to the CyberArk
 # account dict. Steps:
-#   1. Capture existing managed keys on the target host (to know what N-1 is)
+#   1. Capture existing managed keys on the target host (to know what N is)
 #   2. Generate new ED25519 key pair (N+1) in a 0700 temp dir on localhost
 #   3. Convert to PPK v2 and assert the format
 #   4. Add N+1 to authorized_keys (fail-safe: N and N+1 are both valid)
 #   5. Update CyberArk with the N+1 private key
-#   6. Remove N-1 from authorized_keys if it existed before this rotation
+#   6. Remove pre-rotation keys from authorized_keys
 #   7. Always: delete the temp dir regardless of success or failure
-#
-# Key material is read directly via lookup('file') at template evaluation time
-# rather than slurp+register+set_fact, which avoids delegate_to / no_log scoping issues.
 
 - name: "Create secure temp dir for {{ _account.name }}"
   ansible.builtin.tempfile:
@@ -33,9 +30,8 @@
         _cyberark_ak_path: "{{ cyberark_ssh_key_home_base }}/{{ _account.userName }}/.ssh/authorized_keys"
 
     # Step 1 — capture current managed key lines before generating the new one.
-    # stdout_lines will be [] (first rotation), [N] (one previous rotation),
-    # or [N-1, N] (two or more previous rotations). The full list is removed in
-    # step 6 now that CyberArk holds N+1. become: true required — .ssh is mode 700.
+    # stdout_lines will be [] (first rotation) or [N] / [N-1, N] on subsequent runs.
+    # become: true required — .ssh is mode 700, owned by the account user.
     - name: "Read existing managed keys for {{ _account.name }}"
       ansible.builtin.shell: >
         grep "cark_managed_{{ _account.name }}"
@@ -123,59 +119,6 @@
       become: true
       when: not cyberark_dry_run | bool
 
-    - name: "DEBUG — authorized_keys state for {{ _account.name }}"
-      ansible.builtin.shell: |
-        echo "=== .ssh dir ==="
-        ls -la {{ _cyberark_ak_path | dirname }} 2>&1 || true
-        echo "=== authorized_keys ==="
-        cat {{ _cyberark_ak_path }} 2>&1 || true
-      register: _debug_authkeys
-      become: true
-      changed_when: false
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — fingerprint of generated public key (control node) for {{ _account.name }}"
-      ansible.builtin.command:
-        argv:
-          - ssh-keygen
-          - -lf
-          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.pub"
-      register: _debug_fp_generated
-      changed_when: false
-      delegate_to: localhost
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — fingerprint of key(s) in authorized_keys (target host) for {{ _account.name }}"
-      ansible.builtin.command:
-        argv:
-          - ssh-keygen
-          - -lf
-          - "{{ _cyberark_ak_path }}"
-      register: _debug_fp_authkeys
-      become: true
-      changed_when: false
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — fingerprint of public key extracted from PPK for {{ _account.name }}"
-      ansible.builtin.shell: >-
-        puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
-        -O public-openssh-fingerprint 2>/dev/null
-        || puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
-        -O public-openssh 2>/dev/null | ssh-keygen -lf /dev/stdin
-      register: _debug_fp_ppk
-      changed_when: false
-      delegate_to: localhost
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — fingerprint comparison for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg:
-          - "generated pub key : {{ _debug_fp_generated.stdout | trim }}"
-          - "authorized_keys   : {{ _debug_fp_authkeys.stdout_lines }}"
-          - "PPK extracted key : {{ _debug_fp_ppk.stdout | trim }}"
-          - "match=YES if all three SHA256 hashes are identical"
-      when: not cyberark_dry_run | bool
-
     # Step 5 — update CyberArk with N+1 private key
     - name: "[DRY RUN] Update CyberArk with new private key: {{ _account.name }}"
       ansible.builtin.debug:
@@ -199,59 +142,8 @@
           NewCredentials: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | regex_replace('(?<!\r)\n', '\r\n') }}"
         status_code: 200
         validate_certs: "{{ cyberark_validate_certs }}"
-      register: _cyberark_update_result
       delegate_to: localhost
       no_log: true
-      when: not cyberark_dry_run | bool
-
-    # Step 5b — verify SSH auth from control node using the new key.
-    # Proves the key is correctly installed before we remove the old ones.
-    - name: "DEBUG — verify SSH auth with new key for {{ _account.name }}"
-      ansible.builtin.command:
-        argv:
-          - ssh
-          - -i
-          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
-          - -o
-          - StrictHostKeyChecking=no
-          - -o
-          - BatchMode=yes
-          - -o
-          - ConnectTimeout=10
-          - -o
-          - IdentitiesOnly=yes
-          - "{{ _account.userName }}@{{ inventory_hostname }}"
-          - "true"
-      register: _ssh_verify
-      delegate_to: localhost
-      ignore_errors: true
-      changed_when: false
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — SSH auth result for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg: "SSH auth test: {{ 'PASSED — key is correctly installed' if _ssh_verify.rc == 0 else 'FAILED (rc=' + (_ssh_verify.rc | string) + '): ' + _ssh_verify.stderr }}"
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — sshd effective config for {{ _account.name }}"
-      ansible.builtin.shell: |
-        echo "=== effective sshd config (user={{ _account.userName }}) ==="
-        sshd -T -C user={{ _account.userName }} 2>/dev/null \
-          | grep -iE 'authorizedkeysfile|pubkeyauthentication|allowusers|allowgroups|maxauthtries' \
-          || grep -iE 'AuthorizedKeysFile|PubkeyAuthentication|AllowUsers|AllowGroups|MaxAuthTries' /etc/ssh/sshd_config
-        echo "=== Match blocks in sshd_config ==="
-        grep -n 'Match' /etc/ssh/sshd_config 2>/dev/null || echo "(none)"
-        echo "=== auth.log (last 20 lines) ==="
-        tail -n 20 /var/log/auth.log 2>/dev/null || tail -n 20 /var/log/syslog 2>/dev/null || echo "(not readable)"
-      register: _sshd_config_check
-      become: true
-      changed_when: false
-      ignore_errors: true
-      when: not cyberark_dry_run | bool
-
-    - name: "DEBUG — show sshd config for {{ _account.name }}"
-      ansible.builtin.debug:
-        var: _sshd_config_check.stdout_lines
       when: not cyberark_dry_run | bool
 
     # Step 6 — remove all pre-rotation managed keys now that CyberArk holds N+1.

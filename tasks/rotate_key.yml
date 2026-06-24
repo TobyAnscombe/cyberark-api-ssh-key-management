@@ -134,22 +134,46 @@
       changed_when: false
       when: not cyberark_dry_run | bool
 
-    - name: "DEBUG — fingerprint of generated public key for {{ _account.name }}"
+    - name: "DEBUG — fingerprint of generated public key (control node) for {{ _account.name }}"
       ansible.builtin.command:
         argv:
           - ssh-keygen
           - -lf
           - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.pub"
-      register: _debug_fingerprint
+      register: _debug_fp_generated
       changed_when: false
       delegate_to: localhost
       when: not cyberark_dry_run | bool
 
-    - name: "DEBUG — show authorized_keys and key fingerprint for {{ _account.name }}"
+    - name: "DEBUG — fingerprint of key(s) in authorized_keys (target host) for {{ _account.name }}"
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -lf
+          - "{{ _cyberark_ak_path }}"
+      register: _debug_fp_authkeys
+      become: true
+      changed_when: false
+      when: not cyberark_dry_run | bool
+
+    - name: "DEBUG — fingerprint of public key extracted from PPK for {{ _account.name }}"
+      ansible.builtin.shell: >-
+        puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+        -O public-openssh-fingerprint 2>/dev/null
+        || puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+        -O public-openssh 2>/dev/null | ssh-keygen -lf /dev/stdin
+      register: _debug_fp_ppk
+      changed_when: false
+      delegate_to: localhost
+      when: not cyberark_dry_run | bool
+
+    - name: "DEBUG — fingerprint comparison for {{ _account.name }}"
       ansible.builtin.debug:
         msg:
-          - "{{ _debug_authkeys.stdout_lines }}"
-          - "fingerprint: {{ _debug_fingerprint.stdout | trim }}"
+          - "generated pub key : {{ _debug_fp_generated.stdout | trim }}"
+          - "authorized_keys   : {{ _debug_fp_authkeys.stdout_lines }}"
+          - "PPK extracted key : {{ _debug_fp_ppk.stdout | trim }}"
+          - "match=YES if all three SHA256 hashes are identical"
       when: not cyberark_dry_run | bool
 
     # Step 5 — update CyberArk with N+1 private key
@@ -210,10 +234,15 @@
       when: not cyberark_dry_run | bool
 
     - name: "DEBUG — sshd effective config for {{ _account.name }}"
-      ansible.builtin.shell: >
-        sshd -T -C user={{ _account.userName }} 2>/dev/null
-        | grep -iE 'authorizedkeysfile|pubkeyauthentication|allowusers|maxauthtries'
-        || grep -iE 'AuthorizedKeysFile|PubkeyAuthentication|AllowUsers|MaxAuthTries' /etc/ssh/sshd_config
+      ansible.builtin.shell: |
+        echo "=== effective sshd config (user={{ _account.userName }}) ==="
+        sshd -T -C user={{ _account.userName }} 2>/dev/null \
+          | grep -iE 'authorizedkeysfile|pubkeyauthentication|allowusers|allowgroups|maxauthtries' \
+          || grep -iE 'AuthorizedKeysFile|PubkeyAuthentication|AllowUsers|AllowGroups|MaxAuthTries' /etc/ssh/sshd_config
+        echo "=== Match blocks in sshd_config ==="
+        grep -n 'Match' /etc/ssh/sshd_config 2>/dev/null || echo "(none)"
+        echo "=== auth.log (last 20 lines) ==="
+        tail -n 20 /var/log/auth.log 2>/dev/null || tail -n 20 /var/log/syslog 2>/dev/null || echo "(not readable)"
       register: _sshd_config_check
       become: true
       changed_when: false

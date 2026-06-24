@@ -57,17 +57,17 @@
 
     # Step 3 — convert and assert PPK v2
     - name: "Convert to PPK v2 for {{ _account.name }}"
-      ansible.builtin.command:
-        argv:
-          - puttygen
-          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
-          - -O
-          - private
-          - --ppk-param
-          - version=2
-          - -o
-          - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+      ansible.builtin.shell: >-
+        puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
+        -O private --ppk-param version=2
+        -o "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+        2>/dev/null
+        ||
+        puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
+        -O private
+        -o "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
       delegate_to: localhost
+      no_log: true
 
     - name: "Verify PPK v2 header for {{ _account.name }}"
       ansible.builtin.command:

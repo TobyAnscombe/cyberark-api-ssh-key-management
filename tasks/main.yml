@@ -54,6 +54,7 @@
       {%- endfor -%}
       {{ result }}
     manage_user_ssh_key_required: false
+    manage_user_service_accounts: []
   when: cyberark_ssh_key_ensure_users | bool
 
 - name: Ensure OS users exist on this host
@@ -62,6 +63,15 @@
   when:
     - cyberark_ssh_key_ensure_users | bool
     - _cyberark_ssh_host_accounts | length > 0
+
+# Check once per host whether the installed puttygen supports --ppk-param.
+# Done here rather than inside the per-account loop to avoid repeating it N times.
+- name: Check puttygen --ppk-param support
+  ansible.builtin.shell: puttygen --help 2>&1 | grep -q 'ppk-param'
+  register: _ppk_param_supported
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
 
 # Rotate the SSH key pair for each applicable account.
 - name: "Rotate SSH key for {{ _account.name }}"

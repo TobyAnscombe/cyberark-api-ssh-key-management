@@ -62,6 +62,9 @@
 # Note: for vaults with >2000 matching accounts, extend the loop above into a
 # proper pagination loop. For typical cark_ fleets a single nextLink page is sufficient.
 
+# delegate_facts: true stores the fact on localhost rather than the delegating host.
+# This makes _cyberark_ssh_accounts accessible to all inventory hosts via
+# hostvars['localhost']['_cyberark_ssh_accounts'] without re-running discovery per host.
 - name: Filter to cark_ SSH key accounts
   ansible.builtin.set_fact:
     _cyberark_ssh_accounts: >-

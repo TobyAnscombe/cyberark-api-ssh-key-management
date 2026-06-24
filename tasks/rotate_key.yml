@@ -60,13 +60,6 @@
       no_log: true
 
     # Step 3 — convert and assert PPK v2
-    - name: "Check puttygen --ppk-param support"
-      ansible.builtin.shell: puttygen --help 2>&1 | grep -q 'ppk-param'
-      register: _ppk_param_supported
-      changed_when: false
-      failed_when: false
-      delegate_to: localhost
-
     - name: "Convert to PPK v2 for {{ _account.name }}"
       ansible.builtin.command:
         argv: >-

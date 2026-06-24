@@ -38,7 +38,6 @@
         /home/{{ _account.userName }}/.ssh/authorized_keys 2>/dev/null || true
       register: _existing_managed_keys
       changed_when: false
-      delegate_to: "{{ _account.address }}"
 
     # Step 2 — generate N+1
     - name: "Generate ED25519 key pair for {{ _account.name }}"
@@ -103,7 +102,6 @@
         user: "{{ _account.userName }}"
         key: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}"
         state: present
-      delegate_to: "{{ _account.address }}"
       when: not cyberark_dry_run | bool
 
     # Step 5 — update CyberArk with N+1 private key
@@ -150,7 +148,6 @@
         user: "{{ _account.userName }}"
         key: "{{ _existing_managed_keys.stdout_lines[0] }}"
         state: absent
-      delegate_to: "{{ _account.address }}"
       when:
         - not cyberark_dry_run | bool
         - _existing_managed_keys.stdout_lines | length >= 2

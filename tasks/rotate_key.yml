@@ -30,15 +30,18 @@
         _cyberark_ak_path: "{{ cyberark_ssh_key_home_base }}/{{ _account.userName }}/.ssh/authorized_keys"
 
     # Step 1 — capture current managed key lines before generating the new one.
-    # stdout_lines will be [] (first rotation) or [N] / [N-1, N] on subsequent runs.
     # become: true required — .ssh is mode 700, owned by the account user.
+    # [ ! -f ] short-circuits on first rotation; failed_when surfaces real read errors (rc > 1).
+    # -Fw: fixed-string (-F) prevents dots in account names being treated as regex wildcards;
+    #       word-boundary (-w) prevents prefix collisions (e.g. cark_a matching cark_ab).
     - name: "Read existing managed keys for {{ _account.name }}"
       ansible.builtin.shell: >
-        grep "cark_managed_{{ _account.name }}"
-        {{ _cyberark_ak_path }} 2>/dev/null || true
+        [ ! -f "{{ _cyberark_ak_path }}" ] ||
+        grep -Fw "cark_managed_{{ _account.name }}" "{{ _cyberark_ak_path }}"
       register: _existing_managed_keys
       become: true
       changed_when: false
+      failed_when: _existing_managed_keys.rc > 1
 
     # Step 2 — generate N+1
     - name: "Generate ED25519 key pair for {{ _account.name }}"
@@ -57,16 +60,20 @@
       no_log: true
 
     # Step 3 — convert and assert PPK v2
+    - name: "Check puttygen --ppk-param support"
+      ansible.builtin.shell: puttygen --help 2>&1 | grep -q 'ppk-param'
+      register: _ppk_param_supported
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
     - name: "Convert to PPK v2 for {{ _account.name }}"
-      ansible.builtin.shell: >-
-        puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
-        -O private --ppk-param version=2
-        -o "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
-        2>/dev/null
-        ||
-        puttygen "{{ _key_tmpdir.path }}/id_{{ _account.name }}"
-        -O private
-        -o "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
+      ansible.builtin.command:
+        argv: >-
+          {{ ['puttygen', _key_tmpdir.path + '/id_' + _account.name,
+               '-O', 'private']
+             + (['--ppk-param', 'version=2'] if _ppk_param_supported.rc == 0 else [])
+             + ['-o', _key_tmpdir.path + '/id_' + _account.name + '.ppk'] }}
       delegate_to: localhost
       no_log: true
 
@@ -103,10 +110,11 @@
         path: "{{ _cyberark_ak_path | dirname }}"
         state: directory
         owner: "{{ _account.userName }}"
-        group: "{{ _account.userName }}"
         mode: "0700"
       become: true
-      when: not cyberark_dry_run | bool
+      when:
+        - not cyberark_dry_run | bool
+        - cyberark_ssh_key_ensure_users | bool
 
     - name: "Add N+1 public key to authorized_keys for {{ _account.name }}"
       ansible.builtin.lineinfile:
@@ -114,7 +122,6 @@
         line: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}"
         create: true
         owner: "{{ _account.userName }}"
-        group: "{{ _account.userName }}"
         mode: "0600"
       become: true
       when: not cyberark_dry_run | bool

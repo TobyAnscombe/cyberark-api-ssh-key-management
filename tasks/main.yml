@@ -42,18 +42,16 @@
 - name: Build manage_user_accounts from CyberArk discovery
   ansible.builtin.set_fact:
     manage_user_accounts: >-
-      {{
-        _cyberark_ssh_host_accounts
-        | map(attribute='userName')
-        | map('community.general.dict_kv', 'name')
-        | list
-        | map('combine', {
+      {%- set result = [] -%}
+      {%- for acct in _cyberark_ssh_host_accounts -%}
+        {%- set _ = result.append({
+            'name': acct.userName,
             'state': 'present',
-            'sudo': cyberark_ssh_key_sudo,
+            'sudo': cyberark_ssh_key_sudo | bool,
             'allow_ssh': true
-          })
-        | list
-      }}
+          }) -%}
+      {%- endfor -%}
+      {{ result }}
     manage_user_ssh_key_required: false
   when: cyberark_ssh_key_ensure_users | bool
 

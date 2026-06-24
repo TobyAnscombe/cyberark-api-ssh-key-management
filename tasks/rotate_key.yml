@@ -175,6 +175,8 @@
           - BatchMode=yes
           - -o
           - ConnectTimeout=10
+          - -o
+          - IdentitiesOnly=yes
           - "{{ _account.userName }}@{{ inventory_hostname }}"
           - "true"
       register: _ssh_verify
@@ -191,8 +193,8 @@
     - name: "DEBUG — sshd effective config for {{ _account.name }}"
       ansible.builtin.shell: >
         sshd -T -C user={{ _account.userName }} 2>/dev/null
-        | grep -iE 'authorizedkeysfile|pubkeyauthentication|allowusers'
-        || grep -iE 'AuthorizedKeysFile|PubkeyAuthentication|AllowUsers' /etc/ssh/sshd_config
+        | grep -iE 'authorizedkeysfile|pubkeyauthentication|allowusers|maxauthtries'
+        || grep -iE 'AuthorizedKeysFile|PubkeyAuthentication|AllowUsers|MaxAuthTries' /etc/ssh/sshd_config
       register: _sshd_config_check
       become: true
       changed_when: false

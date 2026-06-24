@@ -109,7 +109,7 @@
       ansible.builtin.debug:
         msg: >-
           POST /passwordvault/api/Accounts/{{ _account.id }}/Password/Update
-          — would store new PPK v2 private key (len={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | length }})
+          — would store new OpenSSH private key (len={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name) | length }})
       when: cyberark_dry_run | bool
 
     - name: "Update CyberArk with new private key: {{ _account.name }}"
@@ -124,7 +124,7 @@
           Content-Type: "application/json"
         body_format: json
         body:
-          NewCredentials: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | regex_replace('\r', '') }}"
+          NewCredentials: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name) | regex_replace('\r', '') }}"
         status_code: 200
         validate_certs: "{{ cyberark_validate_certs }}"
       register: _cyberark_update_result

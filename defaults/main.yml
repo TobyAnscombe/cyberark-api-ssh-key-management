@@ -20,6 +20,7 @@ cyberark_ssh_key_algorithm: "ed25519"
 # Set false to skip user/sudo/sshd management (keys only).
 cyberark_ssh_key_ensure_users: true
 cyberark_ssh_key_sudo: true               # grant passwordless sudo to discovered accounts
+cyberark_ssh_key_groups: []               # supplementary groups for discovered accounts (e.g. SSH allow group)
 
 # Base home directory for managed accounts. Used to derive the authorized_keys path.
 # Override if accounts are homed under a non-standard base (e.g. /srv/users).

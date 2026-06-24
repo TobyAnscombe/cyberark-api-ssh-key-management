@@ -48,7 +48,8 @@
             'name': acct.userName,
             'state': 'present',
             'sudo': cyberark_ssh_key_sudo | bool,
-            'allow_ssh': true
+            'allow_ssh': true,
+            'groups': cyberark_ssh_key_groups
           }) -%}
       {%- endfor -%}
       {{ result }}

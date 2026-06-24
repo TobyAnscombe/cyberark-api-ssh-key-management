@@ -68,7 +68,6 @@
           - -o
           - "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
       delegate_to: localhost
-      no_log: true
 
     - name: "Verify PPK v2 header for {{ _account.name }}"
       ansible.builtin.command:

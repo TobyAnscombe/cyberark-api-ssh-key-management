@@ -83,7 +83,7 @@
 - name: Report discovered accounts
   ansible.builtin.debug:
     msg: >-
-      Discovered {{ _cyberark_ssh_accounts | length }} cark_ SSH key account(s):
-      {{ _cyberark_ssh_accounts | map(attribute='name') | list | join(', ') }}
+      Discovered {{ hostvars['localhost']['_cyberark_ssh_accounts'] | length }} cark_ SSH key account(s):
+      {{ hostvars['localhost']['_cyberark_ssh_accounts'] | map(attribute='name') | list | join(', ') }}
   delegate_to: localhost
   run_once: true

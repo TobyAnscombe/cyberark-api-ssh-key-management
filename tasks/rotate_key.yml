@@ -8,6 +8,9 @@
 #   5. Update CyberArk with the N+1 private key
 #   6. Remove N-1 from authorized_keys if it existed before this rotation
 #   7. Always: delete the temp dir regardless of success or failure
+#
+# Key material is read directly via lookup('file') at template evaluation time
+# rather than slurp+register+set_fact, which avoids delegate_to / no_log scoping issues.
 
 - name: "Create secure temp dir for {{ _account.name }}"
   ansible.builtin.tempfile:
@@ -21,6 +24,10 @@
     path: "{{ _key_tmpdir.path }}"
     mode: "0700"
   delegate_to: localhost
+
+- name: "DEBUG dry_run state for {{ _account.name }}"
+  ansible.builtin.debug:
+    msg: "cyberark_dry_run={{ cyberark_dry_run }} (pass -e cyberark_dry_run=false to apply)"
 
 - name: "Rotate key for {{ _account.name }}"
   block:
@@ -86,58 +93,25 @@
           puttygen produced {{ _ppk_header.stdout | trim }} for {{ _account.name }}.
           Expected PPK v2. Add --ppk-param version=2 or check puttygen version.
 
-    # Read key material into vars on localhost only — never touch remote hosts with raw key data
-    - name: "Read PPK private key for {{ _account.name }}"
-      ansible.builtin.slurp:
-        src: "{{ _key_tmpdir.path }}/id_{{ _account.name }}.ppk"
-      register: _new_private_ppk
-      delegate_to: localhost
-      no_log: true
-
-    - name: "DEBUG slurp content lengths for {{ _account.name }}"
+    - name: "DEBUG public key content for {{ _account.name }}"
       ansible.builtin.debug:
         msg: >-
-          ppk_b64_len={{ _new_private_ppk.content | length }}
-          ppk_decoded_len={{ _new_private_ppk.content | b64decode | length }}
-          ppk_registered_on={{ inventory_hostname }}
-
-    - name: "Read public key for {{ _account.name }}"
-      ansible.builtin.slurp:
-        src: "{{ _key_tmpdir.path }}/id_{{ _account.name }}.pub"
-      register: _new_public_key_raw
-      delegate_to: localhost
-
-    - name: "DEBUG public key slurp for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg: >-
-          pub_b64_len={{ _new_public_key_raw.content | length }}
-          pub_decoded={{ _new_public_key_raw.content | b64decode | trim }}
-
-    - name: "Store key material for {{ _account.name }}"
-      ansible.builtin.set_fact:
-        _new_private_key: "{{ _new_private_ppk.content | b64decode | regex_replace('\\r', '') }}"
-        _new_public_key: "{{ _new_public_key_raw.content | b64decode | trim }}"
-      no_log: true
-
-    - name: "DEBUG key material after set_fact for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg: >-
-          private_key_len={{ _new_private_key | length }}
-          public_key_len={{ _new_public_key | length }}
-          public_key={{ _new_public_key }}
+          pub_key={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}
+          ppk_len={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | length }}
 
     # Step 4 — fail-safe: add N+1 before touching CyberArk so both N and N+1 are valid
     - name: "[DRY RUN] Add N+1 to authorized_keys: {{ _account.name }}"
       ansible.builtin.debug:
         msg: >-
           authorized_key: user={{ _account.userName }}
-          key=cark_managed_{{ _account.name }} state=present
+          key={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}
+          state=present
       when: cyberark_dry_run | bool
 
     - name: "Add N+1 public key to authorized_keys for {{ _account.name }}"
       ansible.posix.authorized_key:
         user: "{{ _account.userName }}"
-        key: "{{ _new_public_key }}"
+        key: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}"
         state: present
       delegate_to: "{{ _account.address }}"
       when: not cyberark_dry_run | bool
@@ -147,13 +121,8 @@
       ansible.builtin.debug:
         msg: >-
           POST /passwordvault/api/Accounts/{{ _account.id }}/Password/Update
-          — would store new PPK v2 private key
+          — would store new PPK v2 private key (len={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | length }})
       when: cyberark_dry_run | bool
-
-    - name: "DEBUG private key length at uri call point for {{ _account.name }}"
-      ansible.builtin.debug:
-        msg: "private_key_len_at_uri={{ _new_private_key | length }}"
-      when: not cyberark_dry_run | bool
 
     - name: "Update CyberArk with new private key: {{ _account.name }}"
       ansible.builtin.uri:
@@ -167,11 +136,17 @@
           Content-Type: "application/json"
         body_format: json
         body:
-          NewCredentials: "{{ _new_private_key }}"
+          NewCredentials: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.ppk') | regex_replace('\r', '') }}"
         status_code: 200
         validate_certs: "{{ cyberark_validate_certs }}"
+      register: _cyberark_update_result
       delegate_to: localhost
       no_log: true
+      when: not cyberark_dry_run | bool
+
+    - name: "DEBUG CyberArk update response status for {{ _account.name }}"
+      ansible.builtin.debug:
+        msg: "cyberark_update_status={{ _cyberark_update_result.status | default('skipped') }}"
       when: not cyberark_dry_run | bool
 
     # Step 6 — remove N-1 (the oldest key) now that CyberArk is updated.

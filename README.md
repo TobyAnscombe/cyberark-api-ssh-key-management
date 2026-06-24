@@ -11,19 +11,19 @@ Part of the [CyberArk Privilege Cloud Ansible suite](https://github.com/TobyAnsc
 1. **Authenticate** — the `cyberark_auth` role runs first, producing `cyberark_token`
 2. **Discover** — queries the Privilege Cloud API for all accounts whose name starts with `cark_` and whose `secretType` is `key`
 3. **Scope** — per inventory host, filters accounts by `remoteMachinesAccess.remoteMachines` (empty = all hosts)
-4. **Ensure users** — builds `manage_user_accounts` dynamically from the discovered accounts and calls the `manage_user` role to create OS users, grant passwordless sudo, and add them to sshd `AllowUsers`
+4. **Ensure users** — builds `manage_user_accounts` dynamically from the discovered accounts and calls the `ubuntu_manage_user` role to create OS users, add them to the required supplementary groups (e.g. an sshd `AllowGroups` group), grant passwordless sudo, and add them to sshd `AllowUsers`
 5. **Rotate keys** — for each account on each applicable host:
-   - Captures any existing managed keys (N and N-1) from `authorized_keys`
+   - Captures any existing managed keys from `authorized_keys`
    - Generates a new ED25519 key pair (N+1) in a restricted temp directory
    - Converts to PPK v2 and asserts the format
    - **Adds N+1 to `authorized_keys`** — N and N+1 are both valid before CyberArk is updated
    - **Updates CyberArk** with the N+1 private key
-   - **Removes N-1** from `authorized_keys` — at most two managed keys remain
+   - **Removes all pre-rotation keys** from `authorized_keys` — exactly one managed key remains
    - Always deletes the temp directory, including on failure
 
 ### Fail-safe key model
 
-At any point during rotation, at most **two** managed keys exist in `authorized_keys` per account. If the CyberArk update fails, the current key N is still valid. The oldest key N-1 is only removed after CyberArk holds N+1.
+During rotation, N+1 is added to `authorized_keys` **before** CyberArk is updated. If the CyberArk update fails, the current key N is still valid and the play fails loudly. Pre-rotation keys are only removed after CyberArk successfully holds N+1 — so connectivity is never interrupted regardless of where a failure occurs.
 
 ---
 
@@ -95,8 +95,10 @@ All variables are defined in `defaults/main.yml`.
 | `cyberark_ssh_key_platform_filter` | `[]` | Optional list of `platformId` values to restrict further |
 | `cyberark_ssh_key_page_size` | `1000` | Accounts per API page |
 | `cyberark_ssh_key_algorithm` | `"ed25519"` | SSH key algorithm |
-| `cyberark_ssh_key_ensure_users` | `true` | Create OS users, grant sudo, add to sshd AllowUsers |
+| `cyberark_ssh_key_ensure_users` | `true` | Create OS users, grant sudo, add to sshd AllowUsers. Set `false` to skip user setup (rotation only). |
 | `cyberark_ssh_key_sudo` | `true` | Grant passwordless sudo to discovered accounts |
+| `cyberark_ssh_key_groups` | `[]` | Supplementary groups to assign to each discovered account. Set this in your playbook vars — group names are typically internal. If your sshd config uses `AllowGroups`, accounts must be members of a listed group or SSH login will be blocked. |
+| `cyberark_ssh_key_home_base` | `"/home"` | Base home directory for managed accounts. The authorized_keys path is derived as `<home_base>/<userName>/.ssh/authorized_keys`. Override if accounts are homed outside `/home`. |
 | `cyberark_dry_run` | `true` | Default safe — shows what would change without applying |
 | `cyberark_validate_certs` | `true` | TLS certificate validation |
 
@@ -140,9 +142,9 @@ No static account list is needed — accounts are discovered from CyberArk at ru
 | Role | Source | Purpose |
 |---|---|---|
 | `cyberark_auth` | `cyberark-api-management` | OAuth2 authentication → `cyberark_token` |
-| `ubuntu_manage_user` | `ubuntu-user-creation` | OS user creation, sudo, sshd AllowUsers |
+| `ubuntu_manage_user` | `ubuntu-user-creation` | OS user creation, supplementary groups, sudo, sshd AllowUsers/AllowGroups |
 
-The `ubuntu_manage_user` role must be v1.0.0+ (adds `manage_user_ssh_key_required` support — keys are managed by CyberArk, not declared statically).
+`ubuntu_manage_user` is called conditionally when `cyberark_ssh_key_ensure_users: true` (the default). It requires v1.1.0+ for `manage_user_ssh_key_required: false` support — keys are managed by this role, not declared statically in the user list.
 
 ---
 

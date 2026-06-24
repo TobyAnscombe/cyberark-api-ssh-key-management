@@ -28,15 +28,20 @@
 - name: "Rotate key for {{ _account.name }}"
   block:
 
+    - name: "Set authorized_keys path for {{ _account.name }}"
+      ansible.builtin.set_fact:
+        _cyberark_ak_path: "{{ cyberark_ssh_key_home_base }}/{{ _account.userName }}/.ssh/authorized_keys"
+
     # Step 1 — capture current managed key lines before generating the new one.
     # stdout_lines will be [] (first rotation), [N] (one previous rotation),
-    # or [N-1, N] (two or more previous rotations). The first entry is always
-    # the oldest and is removed in step 6 when length >= 2.
+    # or [N-1, N] (two or more previous rotations). The full list is removed in
+    # step 6 now that CyberArk holds N+1. become: true required — .ssh is mode 700.
     - name: "Read existing managed keys for {{ _account.name }}"
       ansible.builtin.shell: >
         grep "cark_managed_{{ _account.name }}"
-        /home/{{ _account.userName }}/.ssh/authorized_keys 2>/dev/null || true
+        {{ _cyberark_ak_path }} 2>/dev/null || true
       register: _existing_managed_keys
+      become: true
       changed_when: false
 
     # Step 2 — generate N+1
@@ -87,29 +92,43 @@
           puttygen produced {{ _ppk_header.stdout | trim }} for {{ _account.name }}.
           Expected PPK v2. Add --ppk-param version=2 or check puttygen version.
 
-    # Step 4 — fail-safe: add N+1 before touching CyberArk so both N and N+1 are valid
+    # Step 4 — fail-safe: add N+1 before touching CyberArk so both N and N+1 are valid.
+    # lineinfile with explicit path avoids the getpwnam ambiguity of the authorized_key module.
     - name: "[DRY RUN] Add N+1 to authorized_keys: {{ _account.name }}"
       ansible.builtin.debug:
         msg: >-
-          authorized_key: user={{ _account.userName }}
-          key={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}
+          lineinfile: path={{ _cyberark_ak_path }}
+          line={{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}
           state=present
       when: cyberark_dry_run | bool
 
+    - name: "Ensure .ssh dir exists for {{ _account.userName }}"
+      ansible.builtin.file:
+        path: "{{ _cyberark_ak_path | dirname }}"
+        state: directory
+        owner: "{{ _account.userName }}"
+        group: "{{ _account.userName }}"
+        mode: "0700"
+      become: true
+      when: not cyberark_dry_run | bool
+
     - name: "Add N+1 public key to authorized_keys for {{ _account.name }}"
-      authorized_key:
-        user: "{{ _account.userName }}"
-        key: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}"
-        state: present
+      ansible.builtin.lineinfile:
+        path: "{{ _cyberark_ak_path }}"
+        line: "{{ lookup('file', _key_tmpdir.path + '/id_' + _account.name + '.pub') | trim }}"
+        create: true
+        owner: "{{ _account.userName }}"
+        group: "{{ _account.userName }}"
+        mode: "0600"
       become: true
       when: not cyberark_dry_run | bool
 
     - name: "DEBUG — authorized_keys state for {{ _account.name }}"
       ansible.builtin.shell: |
         echo "=== .ssh dir ==="
-        ls -la /home/{{ _account.userName }}/.ssh/ 2>&1 || true
+        ls -la {{ _cyberark_ak_path | dirname }} 2>&1 || true
         echo "=== authorized_keys ==="
-        cat /home/{{ _account.userName }}/.ssh/authorized_keys 2>&1 || true
+        cat {{ _cyberark_ak_path }} 2>&1 || true
       register: _debug_authkeys
       become: true
       changed_when: false
@@ -207,23 +226,22 @@
       when: not cyberark_dry_run | bool
 
     # Step 6 — remove all pre-rotation managed keys now that CyberArk holds N+1.
-    # Loops over every key that existed before this rotation so stale keys don't
-    # accumulate across runs. The fail-safe window (N and N+1 both valid) is
-    # preserved because N+1 was added in step 4 before any removal here.
+    # Loops over the exact lines captured in step 1 so only keys that existed before
+    # this rotation are removed. N+1 (added in step 4) is not in this list.
     - name: "[DRY RUN] Remove pre-rotation keys from authorized_keys: {{ _account.name }}"
       ansible.builtin.debug:
         msg: >-
-          authorized_key: user={{ _account.userName }}
-          key={{ item }} state=absent (pre-rotation key removal)
+          lineinfile: path={{ _cyberark_ak_path }}
+          regexp={{ item | regex_escape() }} state=absent
       loop: "{{ _existing_managed_keys.stdout_lines }}"
       when:
         - cyberark_dry_run | bool
         - _existing_managed_keys.stdout_lines | length > 0
 
     - name: "Remove pre-rotation managed keys from authorized_keys for {{ _account.name }}"
-      authorized_key:
-        user: "{{ _account.userName }}"
-        key: "{{ item }}"
+      ansible.builtin.lineinfile:
+        path: "{{ _cyberark_ak_path }}"
+        regexp: "{{ item | regex_escape() }}"
         state: absent
       become: true
       loop: "{{ _existing_managed_keys.stdout_lines }}"

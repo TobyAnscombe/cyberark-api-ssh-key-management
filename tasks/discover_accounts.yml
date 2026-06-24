@@ -62,6 +62,16 @@
 # Note: for vaults with >2000 matching accounts, extend the loop above into a
 # proper pagination loop. For typical cark_ fleets a single nextLink page is sufficient.
 
+- name: DEBUG raw accounts before filter
+  ansible.builtin.debug:
+    msg: >-
+      raw_count={{ _cyberark_all_accounts_raw | length }}
+      accounts={{ _cyberark_all_accounts_raw | map(attribute='name') | list }}
+      secret_types={{ _cyberark_all_accounts_raw | map(attribute='secretType') | list }}
+      platform_ids={{ _cyberark_all_accounts_raw | map(attribute='platformId') | list }}
+  delegate_to: localhost
+  run_once: true
+
 - name: Filter to cark_ SSH key accounts
   ansible.builtin.set_fact:
     _cyberark_ssh_accounts: >-

@@ -6,4 +6,4 @@ roles:
     version: v1.0.2
   - name: ubuntu_manage_user
     src: https://github.com/TobyAnscombe/ubuntu-user-creation
-    version: v1.1.7
+    version: v1.1.8
